@@ -1,0 +1,19 @@
+# Build / packaging
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local settings (may change per machine)
+config.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
