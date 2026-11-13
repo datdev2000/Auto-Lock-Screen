@@ -4,11 +4,19 @@
 
 ---
 
-## Cách tải và mở
+## Tải về
 
-1. Tải file **`AutoLockScreen.exe`** (thường nằm trong thư mục `dist` của bản phát hành, hoặc nhận từ người gửi).
-2. Double-click file để mở.
-3. Nếu Windows hỏi *“Windows protected your PC”* → bấm **More info** → **Run anyway** (vì app chưa được Microsoft ký số).
+👉 **[Tải AutoLockScreen.exe](https://github.com/datdev2000/Auto-Lock-Screen/releases/latest/download/AutoLockScreen.exe)**
+
+Hoặc vào trang phát hành: [Releases](https://github.com/datdev2000/Auto-Lock-Screen/releases/latest)
+
+---
+
+## Cách mở
+
+1. Tải file bằng link ở trên.
+2. Double-click **`AutoLockScreen.exe`** để mở.
+3. Nếu Windows hỏi *“Windows protected your PC”* → bấm **More info** → **Run anyway** (app chưa được Microsoft ký số).
 
 Không cần cài Python, không cần mở CMD.
 
