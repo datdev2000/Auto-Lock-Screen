@@ -1,20 +1,35 @@
 """
 AutoLockScreen — khóa màn hình khi không dùng chuột/bàn phím.
-Windows only. Không cần thư viện bên thứ ba.
+Windows only. Hỗ trợ khay hệ thống + khởi động cùng Windows.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
+import threading
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+try:
+    import winreg
+except ImportError:  # non-Windows
+    winreg = None  # type: ignore
+
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    pystray = None  # type: ignore
+    Image = None  # type: ignore
+    ImageDraw = None  # type: ignore
+
+
 def _app_dir() -> Path:
-    # Khi đóng gói .exe: lưu config cạnh file exe (có quyền ghi)
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
@@ -22,11 +37,15 @@ def _app_dir() -> Path:
 
 APP_DIR = _app_dir()
 CONFIG_PATH = APP_DIR / "config.json"
+STARTUP_REG_NAME = "AutoLockScreen"
+STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 DEFAULT_CONFIG = {
     "idle_seconds": 60,
     "warning_seconds": 15,
     "enabled": False,
+    "start_with_windows": False,
+    "start_hidden": False,
 }
 
 # ---------- Windows idle + lock ----------
@@ -54,6 +73,63 @@ def get_idle_seconds() -> float:
 
 def lock_workstation() -> None:
     user32.LockWorkStation()
+
+
+# ---------- Launch / startup ----------
+
+def launch_command(*, hidden: bool = False) -> str:
+    """Lệnh dùng để đăng ký khởi động cùng Windows."""
+    if getattr(sys, "frozen", False):
+        base = f'"{Path(sys.executable).resolve()}"'
+    else:
+        py = Path(sys.executable).resolve()
+        pythonw = py.with_name("pythonw.exe")
+        runner = pythonw if pythonw.exists() else py
+        script = Path(__file__).resolve()
+        base = f'"{runner}" "{script}"'
+    if hidden:
+        return f"{base} --hidden"
+    return base
+
+
+def is_start_with_windows() -> bool:
+    if winreg is None:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH) as key:
+            winreg.QueryValueEx(key, STARTUP_REG_NAME)
+            return True
+    except OSError:
+        return False
+
+
+def set_start_with_windows(enabled: bool, *, hidden: bool = False) -> None:
+    if winreg is None:
+        raise RuntimeError("Chỉ hỗ trợ Windows.")
+    if enabled:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(
+                key, STARTUP_REG_NAME, 0, winreg.REG_SZ, launch_command(hidden=hidden)
+            )
+    else:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, STARTUP_REG_PATH, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.DeleteValue(key, STARTUP_REG_NAME)
+        except FileNotFoundError:
+            pass
+
+
+def make_tray_image():
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((4, 4, 60, 60), radius=14, fill=(76, 139, 245, 255))
+    draw.rectangle((18, 22, 46, 42), outline=(255, 255, 255, 255), width=3)
+    draw.rectangle((28, 42, 36, 48), fill=(255, 255, 255, 255))
+    return img
 
 
 # ---------- Config ----------
@@ -102,7 +178,6 @@ class WarningOverlay:
         win.configure(bg="#1a1d23")
         win.protocol("WM_DELETE_WINDOW", self.cancel)
 
-        # Center on primary screen
         w, h = 420, 220
         sw = win.winfo_screenwidth()
         sh = win.winfo_screenheight()
@@ -139,7 +214,7 @@ class WarningOverlay:
         btn_row = tk.Frame(frame, bg="#1a1d23")
         btn_row.pack(anchor="e", pady=(20, 0))
 
-        cancel_btn = tk.Button(
+        tk.Button(
             btn_row,
             text="Hủy khóa",
             font=("Segoe UI", 10),
@@ -152,19 +227,18 @@ class WarningOverlay:
             pady=6,
             cursor="hand2",
             command=self.cancel,
-        )
-        cancel_btn.pack(side="right")
+        ).pack(side="right")
 
         self._update_text()
         self._schedule_tick()
+        win.deiconify()
+        win.lift()
         win.focus_force()
 
     def _update_text(self) -> None:
         if not self.visible:
             return
-        self.countdown_label.config(
-            text=f"Khóa sau {self._remaining} giây"
-        )
+        self.countdown_label.config(text=f"Khóa sau {self._remaining} giây")
 
     def _schedule_tick(self) -> None:
         if self.win is None:
@@ -174,7 +248,6 @@ class WarningOverlay:
     def _on_tick(self) -> None:
         if not self.visible:
             return
-        # Activity during warning → cancel
         if get_idle_seconds() < 0.8:
             self.cancel()
             return
@@ -212,17 +285,21 @@ class WarningOverlay:
 class AutoLockApp:
     POLL_MS = 250
 
-    def __init__(self) -> None:
+    def __init__(self, *, start_hidden: bool = False) -> None:
         self.cfg = load_config()
+        self._start_hidden = start_hidden
         self.root = tk.Tk()
         self.root.title("Auto Lock Screen")
-        self.root.minsize(420, 460)
+        self.root.minsize(420, 520)
         self.root.configure(bg="#12141a")
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         self.warning = WarningOverlay(self)
         self._poll_job: str | None = None
         self._enabled = bool(self.cfg.get("enabled", False))
+        self._tray: pystray.Icon | None = None
+        self._tray_thread: threading.Thread | None = None
+        self._exiting = False
 
         self._build_style()
         self._build_ui()
@@ -230,6 +307,16 @@ class AutoLockApp:
         self._update_status_labels()
         if self._enabled:
             self._start_monitoring()
+
+        if pystray is not None:
+            self._setup_tray()
+        elif start_hidden:
+            messagebox.showwarning(
+                "Thiếu thư viện",
+                "Cần cài pystray + pillow để chạy ẩn trên khay.\n"
+                "pip install pystray pillow",
+                parent=self.root,
+            )
 
     def _build_style(self) -> None:
         style = ttk.Style(self.root)
@@ -271,11 +358,7 @@ class AutoLockApp:
             background=card,
             arrowcolor=fg,
         )
-        style.configure(
-            "Horizontal.TScale",
-            background=card,
-            troughcolor="#252a33",
-        )
+        style.configure("Horizontal.TScale", background=card, troughcolor="#252a33")
         style.configure("TCheckbutton", background=card, foreground=fg)
         style.map("TCheckbutton", background=[("active", card)])
 
@@ -290,10 +373,9 @@ class AutoLockApp:
             outer,
             text="Theo dõi chuột & bàn phím — cảnh báo rồi khóa khi không hoạt động.",
             style="Muted.TLabel",
-            wraplength=380,
+            wraplength=400,
         ).pack(anchor="w", padx=24, pady=(0, 12))
 
-        # Status + Bật/Tắt ngay trên đầu — luôn nhìn thấy
         status_card = ttk.Frame(outer, style="Card.TFrame", padding=16)
         status_card.pack(fill="x", padx=24, pady=(0, 8))
 
@@ -324,7 +406,6 @@ class AutoLockApp:
         card = ttk.Frame(outer, style="Card.TFrame", padding=16)
         card.pack(fill="x", padx=24, pady=8)
 
-        # Idle timeout
         ttk.Label(card, text="Thời gian chờ (không hoạt động)", style="Card.TLabel").pack(
             anchor="w"
         )
@@ -338,11 +419,7 @@ class AutoLockApp:
         idle_row.pack(fill="x", pady=(0, 4))
         self.idle_var = tk.IntVar(value=int(self.cfg["idle_seconds"]))
         self.idle_scale = ttk.Scale(
-            idle_row,
-            from_=5,
-            to=600,
-            orient="horizontal",
-            command=self._on_idle_scale,
+            idle_row, from_=5, to=600, orient="horizontal", command=self._on_idle_scale
         )
         self.idle_scale.set(self.idle_var.get())
         self.idle_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -361,7 +438,6 @@ class AutoLockApp:
 
         ttk.Separator(card, orient="horizontal").pack(fill="x", pady=12)
 
-        # Warning timeout
         ttk.Label(card, text="Thời gian chờ thông báo", style="Card.TLabel").pack(
             anchor="w"
         )
@@ -375,11 +451,7 @@ class AutoLockApp:
         warn_row.pack(fill="x", pady=(0, 4))
         self.warn_var = tk.IntVar(value=int(self.cfg["warning_seconds"]))
         self.warn_scale = ttk.Scale(
-            warn_row,
-            from_=3,
-            to=120,
-            orient="horizontal",
-            command=self._on_warn_scale,
+            warn_row, from_=3, to=120, orient="horizontal", command=self._on_warn_scale
         )
         self.warn_scale.set(self.warn_var.get())
         self.warn_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
@@ -396,10 +468,45 @@ class AutoLockApp:
         self.warn_spin.bind("<Return>", lambda e: self._on_warn_spin())
         ttk.Label(card, text="giây", style="CardMuted.TLabel").pack(anchor="e")
 
+        # Options card
+        opt = ttk.Frame(outer, style="Card.TFrame", padding=16)
+        opt.pack(fill="x", padx=24, pady=8)
+        ttk.Label(opt, text="Tuỳ chọn", style="Card.TLabel").pack(anchor="w")
+
+        self.start_win_var = tk.BooleanVar(
+            value=bool(self.cfg.get("start_with_windows", False)) or is_start_with_windows()
+        )
+        self.start_hidden_var = tk.BooleanVar(
+            value=bool(self.cfg.get("start_hidden", False))
+        )
+
+        ttk.Checkbutton(
+            opt,
+            text="Khởi động cùng Windows (mở cửa sổ ứng dụng)",
+            variable=self.start_win_var,
+            command=self._on_startup_option_changed,
+        ).pack(anchor="w", pady=(8, 2))
+        ttk.Checkbutton(
+            opt,
+            text="Khởi động ẩn trên khay hệ thống (như UniKey)",
+            variable=self.start_hidden_var,
+            command=self._on_startup_option_changed,
+        ).pack(anchor="w", pady=(2, 2))
+
+        ttk.Label(
+            opt,
+            text="Đóng cửa sổ (X) → ẩn vào khay. Chuột phải icon khay → Hiện cửa sổ / Thoát.",
+            style="CardMuted.TLabel",
+            wraplength=380,
+        ).pack(anchor="w", pady=(8, 0))
+
         actions = ttk.Frame(outer)
         actions.pack(fill="x", padx=24, pady=(8, 0))
         ttk.Button(actions, text="Lưu cài đặt", command=self.save_settings).pack(
             side="left"
+        )
+        ttk.Button(actions, text="Ẩn vào khay", command=self.hide_to_tray).pack(
+            side="left", padx=(10, 0)
         )
         ttk.Button(actions, text="Thử khóa ngay", command=self._test_lock).pack(
             side="right"
@@ -409,8 +516,60 @@ class AutoLockApp:
             outer,
             text="Bấm «Bật theo dõi» để chạy. Di chuyển chuột khi có cảnh báo để hủy khóa.",
             style="Muted.TLabel",
-            wraplength=380,
+            wraplength=400,
         ).pack(anchor="w", padx=24, pady=(12, 0))
+
+    # ----- tray -----
+
+    def _setup_tray(self) -> None:
+        menu = pystray.Menu(
+            pystray.MenuItem("Hiện cửa sổ", self._tray_show_window, default=True),
+            pystray.MenuItem(
+                "Bật theo dõi",
+                self._tray_toggle_monitoring,
+                checked=lambda item: self._enabled,
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Thoát", self._tray_exit),
+        )
+        self._tray = pystray.Icon(
+            "AutoLockScreen",
+            make_tray_image(),
+            "Auto Lock Screen",
+            menu,
+        )
+        self._tray_thread = threading.Thread(
+            target=self._tray.run, name="tray", daemon=True
+        )
+        self._tray_thread.start()
+
+    def _tray_show_window(self, icon=None, item=None) -> None:
+        self.root.after(0, self.show_window)
+
+    def _tray_toggle_monitoring(self, icon=None, item=None) -> None:
+        self.root.after(0, self.toggle_monitoring)
+
+    def _tray_exit(self, icon=None, item=None) -> None:
+        self.root.after(0, self.quit_app)
+
+    def show_window(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def hide_to_tray(self) -> None:
+        if self._tray is None:
+            messagebox.showinfo(
+                "Khay hệ thống",
+                "Chưa có icon khay (cần pystray + pillow).\n"
+                "Ứng dụng sẽ thu nhỏ thay thế.",
+                parent=self.root,
+            )
+            self.root.iconify()
+            return
+        self.root.withdraw()
+
+    # ----- settings helpers -----
 
     def _clamp_idle(self, value: int) -> int:
         return max(5, min(3600, int(value)))
@@ -451,6 +610,10 @@ class AutoLockApp:
         self.warn_var.set(warn)
         self.idle_scale.set(min(600, idle))
         self.warn_scale.set(min(120, warn))
+        self.start_win_var.set(
+            bool(self.cfg.get("start_with_windows", False)) or is_start_with_windows()
+        )
+        self.start_hidden_var.set(bool(self.cfg.get("start_hidden", False)))
         self._refresh_toggle_button()
 
     def _read_settings_from_ui(self) -> dict:
@@ -460,18 +623,50 @@ class AutoLockApp:
             "idle_seconds": self._clamp_idle(int(self.idle_var.get())),
             "warning_seconds": self._clamp_warn(int(self.warn_var.get())),
             "enabled": self._enabled,
+            "start_with_windows": bool(self.start_win_var.get()),
+            "start_hidden": bool(self.start_hidden_var.get()),
         }
 
+    def _apply_startup_registration(self) -> None:
+        start = bool(self.start_win_var.get())
+        hidden = bool(self.start_hidden_var.get())
+        # Nếu chỉ chọn "khởi động ẩn" mà chưa tích Windows → vẫn đăng ký ẩn
+        if hidden and not start:
+            self.start_win_var.set(True)
+            start = True
+        set_start_with_windows(start, hidden=hidden)
+
+    def _on_startup_option_changed(self) -> None:
+        try:
+            self._apply_startup_registration()
+            self.cfg = self._read_settings_from_ui()
+            save_config(self.cfg)
+        except OSError as exc:
+            messagebox.showerror(
+                "Lỗi khởi động Windows",
+                f"Không ghi được registry:\n{exc}",
+                parent=self.root,
+            )
+            self.start_win_var.set(is_start_with_windows())
+
     def save_settings(self) -> None:
+        try:
+            self._apply_startup_registration()
+        except OSError as exc:
+            messagebox.showerror(
+                "Lỗi khởi động Windows",
+                f"Không ghi được registry:\n{exc}",
+                parent=self.root,
+            )
+            return
         self.cfg = self._read_settings_from_ui()
         save_config(self.cfg)
         messagebox.showinfo("Đã lưu", "Cài đặt đã được lưu.", parent=self.root)
 
     def _refresh_toggle_button(self) -> None:
-        if self._enabled:
-            self.toggle_btn.configure(text="Tắt theo dõi")
-        else:
-            self.toggle_btn.configure(text="Bật theo dõi")
+        self.toggle_btn.configure(
+            text="Tắt theo dõi" if self._enabled else "Bật theo dõi"
+        )
 
     def toggle_monitoring(self) -> None:
         if self._enabled:
@@ -511,13 +706,19 @@ class AutoLockApp:
         if not self._enabled:
             return
         idle = get_idle_seconds()
-        idle_limit = self._clamp_idle(int(self.idle_var.get() or self.cfg["idle_seconds"]))
-        warn_secs = self._clamp_warn(int(self.warn_var.get() or self.cfg["warning_seconds"]))
+        idle_limit = self._clamp_idle(
+            int(self.idle_var.get() or self.cfg["idle_seconds"])
+        )
+        warn_secs = self._clamp_warn(
+            int(self.warn_var.get() or self.cfg["warning_seconds"])
+        )
 
-        self.idle_now_label.configure(text=f"Idle hiện tại: {idle:.1f} giây")
+        try:
+            self.idle_now_label.configure(text=f"Idle hiện tại: {idle:.1f} giây")
+        except tk.TclError:
+            return
 
         if self.warning.visible:
-            # WarningOverlay tự xử lý đếm ngược + hủy khi có activity
             remaining_to_warn = 0
         else:
             remaining_to_warn = max(0, idle_limit - idle)
@@ -563,8 +764,16 @@ class AutoLockApp:
         ):
             lock_workstation()
 
-    def _on_close(self) -> None:
-        # Persist current UI values + enabled state
+    def _on_close_window(self) -> None:
+        # UniKey-style: X = ẩn vào khay, không thoát
+        self.cfg = self._read_settings_from_ui()
+        save_config(self.cfg)
+        self.hide_to_tray()
+
+    def quit_app(self) -> None:
+        if self._exiting:
+            return
+        self._exiting = True
         self.cfg = self._read_settings_from_ui()
         save_config(self.cfg)
         if self._poll_job is not None:
@@ -574,24 +783,44 @@ class AutoLockApp:
                 pass
         if self.warning.visible:
             self.warning.close()
+        if self._tray is not None:
+            try:
+                self._tray.stop()
+            except Exception:
+                pass
+            self._tray = None
         self.root.destroy()
 
     def run(self) -> None:
-        # Center main window
         self.root.update_idletasks()
-        need_w = max(460, self.root.winfo_reqwidth())
-        need_h = max(520, self.root.winfo_reqheight() + 20)
+        need_w = max(480, self.root.winfo_reqwidth())
+        need_h = max(620, self.root.winfo_reqheight() + 20)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"{need_w}x{need_h}+{(sw - need_w) // 2}+{(sh - need_h) // 2}")
+        self.root.geometry(
+            f"{need_w}x{need_h}+{(sw - need_w) // 2}+{(sh - need_h) // 2}"
+        )
+        if self._start_hidden:
+            self.root.withdraw()
         self.root.mainloop()
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Auto Lock Screen")
+    p.add_argument(
+        "--hidden",
+        action="store_true",
+        help="Chạy ẩn trên khay hệ thống (không hiện cửa sổ lúc mở).",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     if sys.platform != "win32":
         print("Ứng dụng chỉ hỗ trợ Windows.", file=sys.stderr)
         return 1
-    AutoLockApp().run()
+    args = parse_args(argv)
+    AutoLockApp(start_hidden=bool(args.hidden)).run()
     return 0
 
 

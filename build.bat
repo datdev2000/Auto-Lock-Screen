@@ -1,6 +1,7 @@
 @echo off
 cd /d "%~dp0"
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoLockScreen main.py
+python -m pip install -r requirements.txt -q
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoLockScreen --hidden-import=pystray._win32 --collect-all pystray main.py
 if errorlevel 1 (
   echo Build that bai.
   pause

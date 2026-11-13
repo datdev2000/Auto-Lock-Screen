@@ -33,8 +33,19 @@ Có thể tạo shortcut (chuột phải → Send to → Desktop) để mở t�
 | Nút | Công dụng |
 |-----|-----------|
 | **Bật / Tắt theo dõi** | Bật hoặc dừng theo dõi idle |
-| **Lưu cài đặt** | Ghi tham số vào `config.json` |
+| **Lưu cài đặt** | Ghi tham số vào `config.json` + đăng ký khởi động |
+| **Ẩn vào khay** | Ẩn cửa sổ, chạy nền như UniKey |
 | **Thử khóa ngay** | Khóa màn hình ngay để kiểm tra |
+
+### Tuỳ chọn
+
+| Tuỳ chọn | Ý nghĩa |
+|----------|---------|
+| **Khởi động cùng Windows** | Mở app (có cửa sổ) khi đăng nhập Windows |
+| **Khởi động ẩn trên khay** | Mở app ẩn icon khay khi đăng nhập (tự bật luôn khởi động cùng Windows) |
+
+- Đóng cửa sổ bằng **X** → **ẩn vào khay**, không thoát
+- Chuột phải icon khay → **Hiện cửa sổ** / **Bật theo dõi** / **Thoát**
 
 Cài đặt được lưu cạnh file chạy (`config.json`). Lần mở sau sẽ nhớ lại.
 
@@ -95,6 +106,6 @@ AutoLockScreen/
 ## Lưu ý
 
 - Chỉ hỗ trợ **Windows** (dùng API `GetLastInputInfo` + `LockWorkStation`)
-- Giữ app đang chạy (có thể thu nhỏ cửa sổ) thì mới theo dõi được
-- Muốn chạy cùng Windows: đặt shortcut `AutoLockScreen.exe` vào thư mục Startup  
-  (`Win + R` → `shell:startup`)
+- App cần đang chạy (cửa sổ hoặc icon khay) mới theo dõi được
+- Khởi động cùng Windows dùng registry `HKCU\...\Run` (bật/tắt trong app)
+- Khi chạy bằng Python cần: `pip install pystray pillow`
