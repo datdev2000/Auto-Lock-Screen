@@ -9,11 +9,15 @@ import argparse
 import json
 import sys
 import threading
+import webbrowser
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
+
+AUTHOR = "datdev2000"
+GITHUB_URL = "https://github.com/datdev2000/Auto-Lock-Screen"
 
 try:
     import winreg
@@ -35,8 +39,17 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _resource_dir() -> Path:
+    """Thư mục asset (khi đóng gói: nằm trong _MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
 APP_DIR = _app_dir()
 CONFIG_PATH = APP_DIR / "config.json"
+ICON_ICO = _resource_dir() / "assets" / "lock.ico"
+ICON_PNG = _resource_dir() / "assets" / "lock.png"
 STARTUP_REG_NAME = "AutoLockScreen"
 STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -123,13 +136,53 @@ def set_start_with_windows(enabled: bool, *, hidden: bool = False) -> None:
             pass
 
 
-def make_tray_image():
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle((4, 4, 60, 60), radius=14, fill=(76, 139, 245, 255))
-    draw.rectangle((18, 22, 46, 42), outline=(255, 255, 255, 255), width=3)
-    draw.rectangle((28, 42, 36, 48), fill=(255, 255, 255, 255))
+def make_lock_image(size: int = 64):
+    """Vẽ icon ổ khóa — dùng chung cho cửa sổ, khay và .exe."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    s = size
+    pad = max(1, s // 32)
+    d.rounded_rectangle(
+        (pad, pad, s - 1 - pad, s - 1 - pad),
+        radius=max(4, s // 5),
+        fill=(76, 139, 245, 255),
+    )
+    bx0, by0 = int(s * 0.28), int(s * 0.48)
+    bx1, by1 = int(s * 0.72), int(s * 0.78)
+    d.rounded_rectangle(
+        (bx0, by0, bx1, by1),
+        radius=max(2, s // 16),
+        fill=(255, 255, 255, 255),
+    )
+    cx, cy = s // 2, int(s * 0.58)
+    r = max(2, s // 18)
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(76, 139, 245, 255))
+    d.rectangle(
+        (cx - r // 2, cy, cx + r // 2, cy + int(s * 0.12)),
+        fill=(76, 139, 245, 255),
+    )
+    sw = max(2, s // 14)
+    d.arc(
+        (int(s * 0.34), int(s * 0.22), int(s * 0.66), int(s * 0.56)),
+        start=200,
+        end=340,
+        fill=(255, 255, 255, 255),
+        width=sw,
+    )
     return img
+
+
+def load_lock_image(size: int = 64):
+    if Image is None:
+        return None
+    if ICON_PNG.exists():
+        try:
+            return Image.open(ICON_PNG).convert("RGBA").resize(
+                (size, size), Image.Resampling.LANCZOS
+            )
+        except OSError:
+            pass
+    return make_lock_image(size)
 
 
 # ---------- Config ----------
@@ -290,9 +343,10 @@ class AutoLockApp:
         self._start_hidden = start_hidden
         self.root = tk.Tk()
         self.root.title("Auto Lock Screen")
-        self.root.minsize(420, 520)
+        self.root.minsize(420, 560)
         self.root.configure(bg="#12141a")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_window)
+        self._apply_window_icon()
 
         self.warning = WarningOverlay(self)
         self._poll_job: str | None = None
@@ -300,6 +354,7 @@ class AutoLockApp:
         self._tray: pystray.Icon | None = None
         self._tray_thread: threading.Thread | None = None
         self._exiting = False
+        self._updating_startup_ui = False
 
         self._build_style()
         self._build_ui()
@@ -318,6 +373,24 @@ class AutoLockApp:
                 parent=self.root,
             )
 
+    def _apply_window_icon(self) -> None:
+        if ICON_ICO.exists():
+            try:
+                self.root.iconbitmap(default=str(ICON_ICO))
+            except tk.TclError:
+                pass
+        # iconphoto giữ icon rõ hơn trên taskbar
+        if Image is not None:
+            try:
+                from PIL import ImageTk
+
+                lock = load_lock_image(64)
+                if lock is not None:
+                    self._tk_icon = ImageTk.PhotoImage(lock)
+                    self.root.iconphoto(True, self._tk_icon)
+            except Exception:
+                pass
+
     def _build_style(self) -> None:
         style = ttk.Style(self.root)
         try:
@@ -329,6 +402,8 @@ class AutoLockApp:
         fg = "#e8eaed"
         muted = "#9aa3b2"
         accent = "#4c8bf5"
+        btn_bg = "#2d3340"
+        btn_hover = "#3d4555"
         style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
         style.configure("TFrame", background=bg)
         style.configure("Card.TFrame", background=card)
@@ -338,18 +413,38 @@ class AutoLockApp:
         style.configure("CardMuted.TLabel", background=card, foreground=muted)
         style.configure("Title.TLabel", background=bg, foreground=fg, font=("Segoe UI", 18, "bold"))
         style.configure("Status.TLabel", background=card, foreground=accent, font=("Segoe UI", 11, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10), padding=(12, 6))
+        style.configure("Link.TLabel", background=bg, foreground=accent, font=("Segoe UI", 9, "underline"))
+        style.configure(
+            "TButton",
+            font=("Segoe UI", 10),
+            padding=(12, 6),
+            background=btn_bg,
+            foreground=fg,
+            bordercolor="#3d4555",
+            lightcolor=btn_bg,
+            darkcolor=btn_bg,
+            focuscolor=btn_bg,
+        )
+        style.map(
+            "TButton",
+            background=[("active", btn_hover), ("pressed", "#252a33"), ("disabled", "#252a33")],
+            foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#888888")],
+        )
         style.configure(
             "Accent.TButton",
             background=accent,
             foreground="#ffffff",
             font=("Segoe UI", 10, "bold"),
             padding=(14, 8),
+            bordercolor=accent,
+            lightcolor=accent,
+            darkcolor=accent,
+            focuscolor=accent,
         )
         style.map(
             "Accent.TButton",
-            background=[("active", "#3a74d8"), ("disabled", "#3a4050")],
-            foreground=[("disabled", "#888")],
+            background=[("active", "#3a74d8"), ("pressed", "#2f63bc"), ("disabled", "#3a4050")],
+            foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#888888")],
         )
         style.configure(
             "TSpinbox",
@@ -484,18 +579,19 @@ class AutoLockApp:
             opt,
             text="Khởi động cùng Windows (mở cửa sổ ứng dụng)",
             variable=self.start_win_var,
-            command=self._on_startup_option_changed,
+            command=self._on_start_win_changed,
         ).pack(anchor="w", pady=(8, 2))
         ttk.Checkbutton(
             opt,
             text="Khởi động ẩn trên khay hệ thống (như UniKey)",
             variable=self.start_hidden_var,
-            command=self._on_startup_option_changed,
+            command=self._on_start_hidden_changed,
         ).pack(anchor="w", pady=(2, 2))
 
         ttk.Label(
             opt,
-            text="Đóng cửa sổ (X) → ẩn vào khay. Chuột phải icon khay → Hiện cửa sổ / Thoát.",
+            text="Tắt «Khởi động cùng Windows» sẽ tắt luôn chế độ ẩn. "
+            "Đóng cửa sổ (X) → ẩn vào khay.",
             style="CardMuted.TLabel",
             wraplength=380,
         ).pack(anchor="w", pady=(8, 0))
@@ -519,6 +615,15 @@ class AutoLockApp:
             wraplength=400,
         ).pack(anchor="w", padx=24, pady=(12, 0))
 
+        about = ttk.Frame(outer)
+        about.pack(fill="x", padx=24, pady=(14, 0))
+        ttk.Label(about, text=f"Author: {AUTHOR}", style="Muted.TLabel").pack(anchor="w")
+        gh = ttk.Label(
+            about, text=f"GitHub: {GITHUB_URL}", style="Link.TLabel", cursor="hand2"
+        )
+        gh.pack(anchor="w", pady=(2, 0))
+        gh.bind("<Button-1>", lambda e: webbrowser.open(GITHUB_URL))
+
     # ----- tray -----
 
     def _setup_tray(self) -> None:
@@ -532,9 +637,10 @@ class AutoLockApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Thoát", self._tray_exit),
         )
+        tray_img = load_lock_image(64) or make_lock_image(64)
         self._tray = pystray.Icon(
             "AutoLockScreen",
-            make_tray_image(),
+            tray_img,
             "Auto Lock Screen",
             menu,
         )
@@ -619,24 +725,24 @@ class AutoLockApp:
     def _read_settings_from_ui(self) -> dict:
         self._on_idle_spin()
         self._on_warn_spin()
+        start = bool(self.start_win_var.get())
+        hidden = bool(self.start_hidden_var.get()) and start
         return {
             "idle_seconds": self._clamp_idle(int(self.idle_var.get())),
             "warning_seconds": self._clamp_warn(int(self.warn_var.get())),
             "enabled": self._enabled,
-            "start_with_windows": bool(self.start_win_var.get()),
-            "start_hidden": bool(self.start_hidden_var.get()),
+            "start_with_windows": start,
+            "start_hidden": hidden,
         }
 
     def _apply_startup_registration(self) -> None:
         start = bool(self.start_win_var.get())
-        hidden = bool(self.start_hidden_var.get())
-        # Nếu chỉ chọn "khởi động ẩn" mà chưa tích Windows → vẫn đăng ký ẩn
-        if hidden and not start:
-            self.start_win_var.set(True)
-            start = True
+        hidden = bool(self.start_hidden_var.get()) and start
+        if not start:
+            hidden = False
         set_start_with_windows(start, hidden=hidden)
 
-    def _on_startup_option_changed(self) -> None:
+    def _persist_startup_options(self) -> None:
         try:
             self._apply_startup_registration()
             self.cfg = self._read_settings_from_ui()
@@ -647,9 +753,43 @@ class AutoLockApp:
                 f"Không ghi được registry:\n{exc}",
                 parent=self.root,
             )
-            self.start_win_var.set(is_start_with_windows())
+            self._updating_startup_ui = True
+            try:
+                self.start_win_var.set(is_start_with_windows())
+                self.start_hidden_var.set(bool(self.cfg.get("start_hidden", False)))
+            finally:
+                self._updating_startup_ui = False
+
+    def _on_start_win_changed(self) -> None:
+        if self._updating_startup_ui:
+            return
+        # Tắt khởi động Windows → tắt luôn chế độ ẩn
+        if not self.start_win_var.get() and self.start_hidden_var.get():
+            self._updating_startup_ui = True
+            try:
+                self.start_hidden_var.set(False)
+            finally:
+                self._updating_startup_ui = False
+        self._persist_startup_options()
+
+    def _on_start_hidden_changed(self) -> None:
+        if self._updating_startup_ui:
+            return
+        # Bật ẩn → cần khởi động cùng Windows
+        if self.start_hidden_var.get() and not self.start_win_var.get():
+            self._updating_startup_ui = True
+            try:
+                self.start_win_var.set(True)
+            finally:
+                self._updating_startup_ui = False
+        self._persist_startup_options()
 
     def save_settings(self) -> None:
+        # Đồng bộ quan hệ 2 checkbox trước khi lưu
+        if not self.start_win_var.get():
+            self.start_hidden_var.set(False)
+        elif self.start_hidden_var.get() and not self.start_win_var.get():
+            self.start_win_var.set(True)
         try:
             self._apply_startup_registration()
         except OSError as exc:
