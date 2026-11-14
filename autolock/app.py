@@ -175,7 +175,7 @@ class AutoLockApp:
         outer = ttk.Frame(self.root, padding=(16, 12, 16, 10))
         outer.pack(fill="both", expand=True)
 
-        # Footer trước (side=bottom) → luôn dính đáy khi maximize
+        # Footer full ngang, dính đáy
         footer = ttk.Frame(outer)
         footer.pack(side="bottom", fill="x", pady=(8, 0))
 
@@ -196,20 +196,16 @@ class AutoLockApp:
         )
         author.pack()
         author.bind("<Button-1>", lambda e: webbrowser.open(GITHUB_URL))
+        self._footer = footer
 
-        # Vùng nội dung có thanh cuộn khi cửa sổ nhỏ
+        # Cuộn bằng chuột (ẩn thanh) — nội dung full ngang theo cửa sổ
         scroll_wrap = ttk.Frame(outer)
         scroll_wrap.pack(fill="both", expand=True)
 
         self._scroll_canvas = tk.Canvas(
             scroll_wrap, bg="#12141a", highlightthickness=0, bd=0
         )
-        scrollbar = ttk.Scrollbar(
-            scroll_wrap, orient="vertical", command=self._scroll_canvas.yview
-        )
-        self._scroll_canvas.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+        self._scroll_canvas.pack(fill="both", expand=True)
 
         body = ttk.Frame(self._scroll_canvas)
         self._body_window = self._scroll_canvas.create_window(
@@ -220,9 +216,26 @@ class AutoLockApp:
             self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
 
         def _on_canvas_configure(event) -> None:
-            self._scroll_canvas.itemconfigure(self._body_window, width=event.width)
+            # Full ngang: body = đúng bề rộng canvas
+            w = max(1, int(event.width))
+            self._scroll_canvas.itemconfigure(self._body_window, width=w)
+            self._scroll_canvas.coords(self._body_window, 0, 0)
+            wrap = max(280, w - 40)
+            try:
+                self._subtitle_label.configure(wraplength=wrap)
+                self._sleep_hint_label.configure(wraplength=wrap)
+                self.sleep_status_label.configure(wraplength=wrap)
+                self._data_path_label.configure(wraplength=wrap)
+            except Exception:
+                pass
 
         def _on_mousewheel(event) -> None:
+            bbox = self._scroll_canvas.bbox("all")
+            if not bbox:
+                return
+            content_h = bbox[3] - bbox[1]
+            if content_h <= self._scroll_canvas.winfo_height():
+                return
             self._scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
 
         def _bind_wheel(_event=None) -> None:
@@ -240,12 +253,13 @@ class AutoLockApp:
         self._unbind_wheel = _unbind_wheel
 
         ttk.Label(body, text="Auto Lock Screen", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
+        self._subtitle_label = ttk.Label(
             body,
             text="Theo dõi chuột & bàn phím — cảnh báo rồi khóa khi không hoạt động.",
             style="Muted.TLabel",
-            wraplength=420,
-        ).pack(anchor="w", pady=(2, 8))
+            wraplength=480,
+        )
+        self._subtitle_label.pack(anchor="w", pady=(2, 8))
 
         status = ttk.Frame(body, style="Card.TFrame", padding=12)
         status.pack(fill="x", pady=(0, 6))
@@ -312,13 +326,14 @@ class AutoLockApp:
                 variable=self.action_var,
                 command=self._on_action_changed,
             ).pack(anchor="w", pady=(4, 0))
-        ttk.Label(
+        self._sleep_hint_label = ttk.Label(
             act,
             text="Nếu Windows Sleep sớm hơn app thì Windows ngủ trước. "
-            "Nên tắt Sleep Windows (nút bên dưới) hoặc đặt timeout app ngắn hơn.",
+            "Nên tắt Sleep Windows hoặc đặt timeout app ngắn hơn.",
             style="CardMuted.TLabel",
-            wraplength=420,
-        ).pack(anchor="w", pady=(6, 0))
+            wraplength=480,
+        )
+        self._sleep_hint_label.pack(anchor="w", pady=(6, 0))
 
         sleep_row = ttk.Frame(act, style="Card.TFrame")
         sleep_row.pack(fill="x", pady=(8, 0))
@@ -335,9 +350,9 @@ class AutoLockApp:
             sleep_row,
             text="Áp dụng ngay",
             command=self._apply_disable_sleep_clicked,
-        ).pack(side="right")
+        ).pack(side="left", padx=(12, 0))
         self.sleep_status_label = ttk.Label(
-            act, text="", style="CardMuted.TLabel", wraplength=420
+            act, text="", style="CardMuted.TLabel", wraplength=480
         )
         self.sleep_status_label.pack(anchor="w", pady=(4, 0))
         self._refresh_sleep_status()
@@ -363,12 +378,13 @@ class AutoLockApp:
             variable=self.start_hidden_var,
             command=self._on_startup_changed,
         ).pack(anchor="w", pady=(2, 0))
-        ttk.Label(
+        self._data_path_label = ttk.Label(
             opt,
             text=f"Dữ liệu: {data_dir()}  ·  X → ẩn khay",
             style="CardMuted.TLabel",
-            wraplength=420,
-        ).pack(anchor="w", pady=(6, 0))
+            wraplength=480,
+        )
+        self._data_path_label.pack(anchor="w", pady=(6, 0))
 
     def _make_scale_spin_row(
         self,
@@ -381,10 +397,10 @@ class AutoLockApp:
         on_scale,
         on_spin,
     ):
-        """Một dòng: thanh kéo + ô số cùng chiều cao."""
-        row = tk.Frame(parent, bg="#1a1d23", height=28)
-        row.pack(fill="x", pady=(4, 0))
-        row.pack_propagate(False)
+        """Một dòng: thanh kéo + ô số căn giữa cùng hàng."""
+        row = tk.Frame(parent, bg="#1a1d23")
+        row.pack(fill="x", pady=(6, 0))
+        row.columnconfigure(0, weight=1)
 
         scale = tk.Scale(
             row,
@@ -393,8 +409,8 @@ class AutoLockApp:
             orient="horizontal",
             showvalue=0,
             resolution=1,
-            width=18,
-            sliderlength=18,
+            width=14,
+            sliderlength=16,
             bd=0,
             highlightthickness=0,
             relief="flat",
@@ -405,7 +421,7 @@ class AutoLockApp:
             command=on_scale,
         )
         scale.set(var.get())
-        scale.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        scale.grid(row=0, column=0, sticky="ew", padx=(0, 10))
 
         spin = tk.Spinbox(
             row,
@@ -422,7 +438,7 @@ class AutoLockApp:
             insertbackground="#e8eaed",
             justify="center",
         )
-        spin.pack(side="right", fill="y", pady=2)
+        spin.grid(row=0, column=1, sticky="e")
         spin.bind("<FocusOut>", lambda e: on_spin())
         spin.bind("<Return>", lambda e: on_spin())
         return scale, spin
@@ -836,12 +852,18 @@ class AutoLockApp:
 
     def run(self) -> None:
         self.root.update_idletasks()
-        w, h = 480, 700
+        w, h = 520, 640
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
-        # Tránh Windows Snap / overlay lạ khi hover maximize
+        self.root.minsize(420, 480)
+        # Ép layout canvas sau khi có kích thước thật (tránh body hẹp / trống)
+        self.root.update_idletasks()
         try:
-            self.root.attributes("-toolwindow", False)
+            cw = max(1, self._scroll_canvas.winfo_width())
+            self._scroll_canvas.itemconfigure(self._body_window, width=cw)
+            self._scroll_canvas.coords(self._body_window, 0, 0)
+            self._scroll_canvas.yview_moveto(0)
+            self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
         except tk.TclError:
             pass
         if self._start_hidden:
