@@ -65,6 +65,15 @@ Yêu cầu: Python 3 trên Windows, đã có `tkinter` (thường có sẵn).
 
 ---
 
+## Tắt Sleep Windows (để app kịp chạy)
+
+**Trong app:** tích **Tắt Sleep tự động của Windows (Never)** → **Áp dụng ngay**.  
+Bỏ tích = khôi phục Sleep cũ.
+
+**Làm tay:** `Win + I` → System → Power & battery → Screen and sleep → đặt Sleep = **Never**.
+
+---
+
 ## Đóng gói lại thành .exe
 
 Khi sửa code và muốn tạo lại file chạy:
@@ -91,15 +100,22 @@ Tham số build: một file (`--onefile`), không hiện console (`--windowed`).
 
 ```
 AutoLockScreen/
-├── main.py              # Mã nguồn
-├── config.json          # Cài đặt (tự tạo/cập nhật khi chạy)
-├── requirements.txt     # PyInstaller (để build)
-├── build.bat            # Script đóng gói .exe
-├── run.bat              # Chạy app (exe hoặc pythonw)
-├── HUONG_DAN.md         # File này
-└── dist/
-    └── AutoLockScreen.exe
+├── main.py                 # Entry point
+├── autolock/               # Module theo chức năng
+│   ├── app.py              # UI chính
+│   ├── config.py           # Đọc/ghi cấu hình
+│   ├── idle.py             # Idle + khóa màn hình
+│   ├── startup.py          # Khởi động cùng Windows
+│   ├── icons.py            # Icon ổ khóa
+│   ├── warning.py          # Cảnh báo sắp khóa
+│   └── paths.py            # Đường dẫn ProgramData / assets
+├── assets/lock.ico         # Icon ứng dụng
+├── requirements.txt
+├── build.bat / run.bat
+└── dist/AutoLockScreen.exe
 ```
+
+Dữ liệu người dùng: `C:\ProgramData\AutoLockScreen\` (config, …)
 
 ---
 

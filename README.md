@@ -96,7 +96,46 @@ Kiểm tra đã bấm **Bật theo dõi** chưa, và app còn chạy (còn icon 
 Copy `AutoLockScreen.exe` vào thư mục bất kỳ (ví dụ Desktop), rồi tạo shortcut nếu muốn.
 
 **File cài đặt lưu ở đâu?**  
-File `config.json` nằm cùng thư mục với `AutoLockScreen.exe` — không cần mở/sửa nếu bạn chỉnh trong app.
+`C:\ProgramData\AutoLockScreen\config.json` — chỉnh trong app là đủ, không cần sửa tay.
+
+**Gỡ cài đặt?**  
+Trong app bấm **Gỡ cài đặt** để xóa dữ liệu + hủy khởi động cùng Windows, rồi tự xóa file `.exe` nếu muốn.
+
+**Máy đang khóa (Win+L) thì app còn đếm không?**  
+Không — app **tạm dừng**. Mở khóa xong mới đếm lại từ đầu (tránh khóa/sleep lặp khi đang khóa).
+
+**Windows Sleep 5 phút, app timeout 10 phút thì sao?**  
+Windows sẽ ngủ trước. App chỉ kịp chạy nếu thời gian chờ của app **ngắn hơn** Sleep của Windows. Khi máy đã ngủ, app cũng bị treo theo.
+
+**Thấy nhiều icon khay?**  
+Chỉ nên chạy **1** bản. Bản mới chặn instance trùng — thoát hết app cũ (chuột phải icon → Thoát) rồi mở lại.
+
+---
+
+## Tắt Sleep tự động của Windows
+
+Để app (Lock / Sleep / Tắt máy) kịp chạy, nên **tắt Sleep Windows** hoặc đặt Sleep dài hơn timeout của app.
+
+### Cách nhanh trong app
+
+1. Mở Auto Lock Screen  
+2. Tích **Tắt Sleep tự động của Windows (Never)**  
+3. Bấm **Áp dụng ngay** (hoặc chỉ tích — cũng áp dụng)  
+4. Dòng trạng thái hiện Sleep AC/Pin = **Never**
+
+Bỏ tích → app **khôi phục** thời gian Sleep cũ (đã lưu).  
+**Gỡ cài đặt** cũng khôi phục Sleep nếu từng tắt.
+
+### Cách làm tay (Settings Windows)
+
+1. Bấm **Start** → gõ **Power** → mở **Power & sleep settings**  
+   (hoặc **Settings → System → Power & battery / Power & sleep**)  
+2. Mục **Screen and sleep** / **Khi cắm điện, PC của tôi chuyển sang chế độ ngủ sau**  
+3. Chọn **Never** (cả khi cắm điện và dùng pin nếu có)  
+4. (Tuỳ chọn) Tắt luôn tắt màn hình nếu muốn: **Never**
+
+**Windows 11 đường tắt:**  
+`Win + I` → **System** → **Power & battery** → **Screen and sleep** → **Never**
 
 ---
 
